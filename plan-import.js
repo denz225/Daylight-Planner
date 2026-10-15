@@ -1,0 +1,25 @@
+function parseAIPlan(text,fallbackDate){
+ if(text.length>200000)throw Error('This plan is too large. Paste up to 100 tasks.');
+ let data;try{data=JSON.parse(text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{throw Error('Paste the JSON response, including its opening and closing brackets. Use the prompt above to ask ChatGPT to reformat your plan.');}
+ const rows=Array.isArray(data)?data:data?.tasks;
+ if(!Array.isArray(rows)||!rows.length||rows.length>100)throw Error('The response must contain between 1 and 100 tasks.');
+ return rows.map((r,i)=>{if(!r||typeof r!=='object')throw Error(`Task ${i+1}: expected a task object.`);const t={id:crypto.randomUUID(),title:typeof r.title==='string'?r.title.trim():'',date:r.date??fallbackDate,priority:r.priority??'medium',start:r.start??'',end:r.end??'',dueDate:r.dueDate??'',dueTime:r.dueTime??'',done:false};
+ if(!t.title||t.title.length>200)throw Error(`Task ${i+1}: needs a title of 1–200 characters.`);
+ if(!validDate(t.date)||t.dueDate!==''&&!validDate(t.dueDate))throw Error(`Task ${i+1}: dates must be real dates in YYYY-MM-DD format.`);
+ if(!['high','medium','low'].includes(t.priority))throw Error(`Task ${i+1}: priority must be high, medium or low.`);
+ if(!validTime(t.start)||!validTime(t.end)||!validTime(t.dueTime))throw Error(`Task ${i+1}: times must use 24-hour HH:MM format.`);
+ if(t.end&&(!t.start||t.end<=t.start))throw Error(`Task ${i+1}: end time must be after start time on the same day.`);
+ if(t.dueTime&&!t.dueDate)throw Error(`Task ${i+1}: a due time needs a due date.`);
+ return t;});
+}
+function planFingerprint(t){return JSON.stringify([t.title.toLowerCase().trim(),t.date,t.priority,t.start,t.end,t.dueDate||'',t.dueTime||'']);}
+document.addEventListener('DOMContentLoaded',()=>{
+ let pending=[];const message=$('#ai-message'),preview=$('#ai-preview'),confirmButton=$('#confirm-ai');
+ function invalidate(){pending=[];preview.replaceChildren();confirmButton.hidden=true;message.textContent='';}
+ $('#import-ai').onclick=()=>{invalidate();$('#ai-result').value='';$('#ai-prompt').value=`Help me break down my goals into concrete tasks and make a realistic agenda. My selected day is ${day}. Use explicit dates; ask me about unclear deadlines rather than inventing them. Distinguish the planned day (date) from the deadline (dueDate/dueTime). Use local 24-hour times. Return ONLY a JSON object with a tasks array (maximum 100 tasks). Every task uses this format: {"title":"Concrete action","date":"${day}","priority":"medium","start":"09:00","end":"09:30","dueDate":"","dueTime":""}. Priority must be high, medium or low. Use empty strings for unknown times or deadlines. End must be after start on the same day. Due time requires a due date. Do not include explanations outside the JSON.\n\nHere are my goals, commitments, available hours and deadlines:\n[Replace this with what I need to do]`;$('#ai-dialog').showModal();};
+ $('#ai-close').onclick=()=>$('#ai-dialog').close();$('#ai-result').oninput=invalidate;
+ $('#copy-prompt').onclick=async()=>{try{await navigator.clipboard.writeText($('#ai-prompt').value);message.textContent='Prompt copied. Paste it into ChatGPT and replace the goals section.';}catch{$('#ai-prompt').focus();$('#ai-prompt').select();message.textContent='Select and copy the prompt manually (Ctrl+C).';}};
+ $('#preview-ai').onclick=()=>{invalidate();try{pending=parseAIPlan($('#ai-result').value,day);const seen=new Set(items.map(planFingerprint));let duplicates=0;pending=pending.filter(t=>{const k=planFingerprint(t);if(seen.has(k)){duplicates++;return false;}seen.add(k);return true;});for(const t of pending){const label=el('label','import-row'),box=el('input');box.type='checkbox';box.checked=true;box.dataset.taskId=t.id;const description=el('span','',t.title);description.append(el('small','',`Planned ${t.date} · ${t.priority}${t.start?' · '+t.start+(t.end?'–'+t.end:''):''}${t.dueDate?' · Due '+t.dueDate+(t.dueTime?' '+t.dueTime:''):''}`));label.append(box,description);preview.append(label);}message.textContent=`${pending.length} ${pending.length===1?'task':'tasks'} ready to review.${duplicates?' '+duplicates+' exact duplicates skipped.':''} Uncheck anything you don’t want; dates and deadlines can be edited after adding.`;confirmButton.hidden=!pending.length;}catch(e){message.textContent=e.message;}};
+ confirmButton.onclick=()=>{const selected=new Set([...preview.querySelectorAll('input:checked')].map(n=>n.dataset.taskId));const seen=new Set(items.map(planFingerprint));const added=pending.filter(t=>selected.has(t.id)&&!seen.has(planFingerprint(t)));if(!added.length){message.textContent='Select at least one new task.';return;}if(items.length+added.length>10000){message.textContent='Planner is full. Export and clear old tasks first.';return;}if(persist([...items,...added])){day=added[0].date;$('#filter').value='all';render();$('#notice').textContent=`Added ${added.length} ${added.length===1?'task':'tasks'}. Showing ${day}; use the date picker for the other days.`;invalidate();$('#ai-dialog').close();}};
+});
+
